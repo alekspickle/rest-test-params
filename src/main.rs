@@ -121,6 +121,7 @@ fn compute(p: &Params) -> Result<Output> {
     let Params { a, b, c, .. } = p;
     let case = p.case.clone().map_or(Case::B, |v| v);
 
+    // TODO: find a better way to handle this stuff
     match case {
         Case::B | Case::C1 => match (a, b, c) {
             (Some(true), Some(true), Some(false)) => output(H::M, &p, case),
