@@ -1,10 +1,5 @@
 use serde_derive::{Deserialize, Serialize};
 
-#[derive(Debug)]
-pub struct InvalidFormat;
-
-impl warp::reject::Reject for InvalidFormat {}
-
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Params {
     #[serde(default)]
@@ -54,3 +49,4 @@ pub struct ErrorMessage {
     pub code: u16,
     pub message: String,
 }
+

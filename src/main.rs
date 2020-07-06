@@ -1,52 +1,120 @@
-//! Simple REST to process different params
+//! Simple RESTFUL server to process different optional params.
 //!
-//! Expected input example {"a":true,"b":true, "c": true, "d": 3.7 "e": 5, "f": 2, "case": "C1"}
+//! ## Expected input example 
+//!
+//! ```{"a":true,"b":true, "c": true, "d": 3.7 "e": 5, "f": 2, "case": "C1"}```
+//!
+//! *Any parameter is omittable, but due to the requirements it will result to incorrect request error.
+//!
+//! ## Task description:
+//! RESTful API receiving parameters:
+//! A: bool
+//! B: bool
+//! C: bool
+//! D: float
+//! E: int
+//! F: int
+//!
+//! ## Expected output
+//!
+//! `{h: M|P|T, k: float}`
+//!
+//! The assignment consists of base expressions set and two custom set of
+//! expressions that override / extend the base rules.
+//!
+//! Base
+//!
+//!     A && B && !C => H = M
+//!     A && B && C => H = P
+//!     !A && B && C => H = T
+//!     [other] => [error]
+//!
+//!     H = M => K = D + (D * E / 10)
+//!     H = P => K = D + (D * (E - F) / 25.5)
+//!     H = T => K = D - (D * F / 30)
+//!
+//! Custom 1
+//!
+//!     H = P => K = 2 * D + (D * E / 100)
+//!
+//! Custom 2
+//!
+//!     A && B && !C => H = T
+//!     A && !B && C => H = M
+//!     H = M => K = F + D + (D * E / 100)
+//!
 //!
 //! # Run:
 //!
 //! ``` RUST_LOG=info cargo run```
+//!
+//! # Test:
+//!
+//! ``` curl -H "Content-Type: application/json" -X POST -d '{"a":true,"b":true, "c": true, "d": 4.7, "e": 5, "f": 2, "case": "C1"}' localhost:3030/compute ```
+//! 
+//! ## Web framework of choice:
+//! Actix has testing utilities included so it is a convenient choice.
+//! (warp claims itself *right* web framework, but albeit nice trace it just too ubiquitous and unclear in terms of testing)
+//!
+//! ## Error handling
+//! Error handling made with anyhow(parsing) + actix_error(web) crates.
+//! 
+//! ## Tests 
+//! Tests feature main possibles scenarios, but not all combinations of params tested, of course.
+//! Most incorrect scenarios will be processed in either
+//!
+
 
 use anyhow::{anyhow, Result};
-use log::{info, warn};
-use std::convert::Infallible;
-use warp::{get, http::StatusCode, path, post, Filter, Rejection, Reply};
-// use serde::err
-#[cfg(test)]
-mod tests;
+use log::warn;
 
 mod types;
 use types::*;
 
-#[tokio::main]
-async fn main() {
-    pretty_env_logger::init();
+use actix_web::{error, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 
-    // POST /compute  {"a":true,"b":true, "c": true, "d": 3.7 "e": 5, "f": 2, "case": "C1"}
-    let compute = post()
-        .and(path("compute"))
-        .and(warp::body::content_length_limit(1024 * 16))
-        .and(warp::body::json())
-        .map(|params: Params| {
-            info!("params {:?}", params);
-            let output = compute(&params).expect("Could not compute value");
+async fn help() -> HttpResponse {
+    HttpResponse::Ok().json(format!(
+        "API expects several of these params. If you got the error, check task description. {:?}",
+        Params::default()
+    ))
+}
 
-            if let H::E = output.h {
-                let code = StatusCode::BAD_REQUEST;
-                warp::reply::json(&ErrorMessage {
-                    message: "Invalid params format\n".into(),
-                    code: code.as_u16(),
-                })
-            } else {
-                warp::reply::json(&output)
-            }
-        });
+///
+async fn index() -> HttpResponse {
+    HttpResponse::Ok().json("You are asking my help, doing so without parameters...")
+}
 
-    // GET /help
-    let help = get().and(path("help")).map(|| format!("API expects several of these params. If you got the error, check task description. {:?}", Params::default()));
+/// This handler uses json extractor with limit
+async fn compute_factory(
+    data: web::Json<Params>,
+    _req: HttpRequest,
+) -> Result<HttpResponse, Error> {
+    match compute(&data) {
+        Ok(a) => Ok(HttpResponse::Ok().json(a)),
+        Err(e) => {
+            warn!("Could not compute value: {:?}", e);
+            Err(error::ErrorBadRequest(format!("Wrong params: {:?}", data)))
+        }
+    }
+}
 
-    let routes = help.or(compute).recover(handle_rejection);
+#[actix_rt::main]
+async fn main() -> std::io::Result<()> {
+    env_logger::init();
 
-    warp::serve(routes).run(([127, 0, 0, 1], 3030)).await
+    HttpServer::new(|| {
+        App::new()
+            // enable logger
+            .wrap(middleware::Logger::default())
+            .data(web::JsonConfig::default().limit(4096)) // <- limit size of the payload (global configuration)
+            .service(web::resource("/").route(web::get().to(index)))
+            .service(web::resource("/compute").route(web::post().to(compute_factory)))
+            .service(web::resource("/help").route(web::get().to(help)))
+    })
+    .bind("127.0.0.1:3030")?
+    .run()
+    .await
 }
 
 fn compute(p: &Params) -> Result<Output> {
@@ -71,10 +139,8 @@ fn compute(p: &Params) -> Result<Output> {
 }
 
 fn output(h: H, p: &Params, case: Case) -> Result<Output> {
-    // if p.d.is_none() {
-    //     return Err(anyhow!("no D param"))
-    // }
-
+    // TODO: figure out how to convert D, F, E params from Option<T> to T
+    // and pass error if it rises in essential places (basically every expect(..))
     let d = p.d.expect("no D param");
 
     match h {
@@ -110,37 +176,183 @@ fn output(h: H, p: &Params, case: Case) -> Result<Output> {
                 k: d - (d * f / 30.0),
             })
         }
-        H::E => Ok(Output { h: H::E, k: 0.0 }),
+        H::E => Err(anyhow!("Set of parameters is not supported.")),
     }
 }
 
-async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
-    let code;
-    let message;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::dev::Service;
+    use actix_web::{http, test, web, App};
 
-    if err.is_not_found() {
-        code = StatusCode::NOT_FOUND;
-        message = "NOT_FOUND";
-    } else if let Some(InvalidFormat) = err.find() {
-        code = StatusCode::BAD_REQUEST;
-        message = "INVALID_PARAMS_FORMAT";
-    } else if let Some(_) = err.find::<warp::reject::MethodNotAllowed>() {
-        // We can handle a specific error, here METHOD_NOT_ALLOWED,
-        // and render it however we want
-        warn!("{:?}", err);
-        code = StatusCode::METHOD_NOT_ALLOWED;
-        message = "METHOD_NOT_ALLOWED";
-    } else {
-        // We should have expected this... Just log and say its a 500
-        eprintln!("unhandled rejection: {:?}", err);
-        code = StatusCode::INTERNAL_SERVER_ERROR;
-        message = "UNHANDLED_REJECTION";
+    #[actix_rt::test]
+    async fn correct_input() -> Result<(), Error> {
+        let mut app = test::init_service(
+            App::new().service(web::resource("/compute").route(web::post().to(compute_factory))),
+        )
+        .await;
+
+        // {"a":true,"b":true, "c": true, "d": 3.7 "e": 5, "f": 2, "case": "C1"}
+        let req = test::TestRequest::post()
+            .uri("/compute")
+            .set_json(&Params {
+                a: Some(true),
+                b: Some(true),
+                c: Some(true),
+                d: Some(3.7),
+                e: Some(5),
+                f: Some(2),
+                case: Some(Case::C1),
+            })
+            .to_request();
+        let resp = app.call(req).await.unwrap();
+
+        assert_eq!(resp.status(), http::StatusCode::OK);
+
+        let response_body = match resp.response().body().as_ref() {
+            Some(actix_web::body::Body::Bytes(bytes)) => bytes,
+            _ => panic!("Response error"),
+        };
+
+        assert_eq!(response_body, r##"{"h":"M","k":7.585}"##);
+
+        Ok(())
     }
 
-    let json = warp::reply::json(&ErrorMessage {
-        code: code.as_u16(),
-        message: message.into(),
-    });
+    #[actix_rt::test]
+    async fn incorrect_base_input() -> Result<(), Error> {
+        let mut app = test::init_service(
+            App::new().service(web::resource("/compute").route(web::post().to(compute_factory))),
+        )
+        .await;
 
-    Ok(warp::reply::with_status(json, code))
+        // {"a":false, "b":false, "c": false, "d": 3.7 "e": 5, "f": 2}
+        let req = test::TestRequest::post()
+            .uri("/compute")
+            .set_json(&Params {
+                a: Some(false),
+                b: Some(false),
+                c: Some(false),
+                d: Some(3.7),
+                e: Some(5),
+                f: Some(2),
+                case: None,
+            })
+            .to_request();
+        let resp = app.call(req).await.unwrap();
+
+        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
+
+        let response_body = match resp.response().body().as_ref() {
+            Some(actix_web::body::Body::Bytes(bytes)) => bytes,
+            _ => panic!("Response error"),
+        };
+
+        let body = std::str::from_utf8(&response_body[0..12]).unwrap();
+        assert_eq!(body, r#"Wrong params"#);
+
+        Ok(())
+    }
+
+    #[actix_rt::test]
+    async fn correct_c1_input() -> Result<(), Error> {
+        let mut app = test::init_service(
+            App::new().service(web::resource("/compute").route(web::post().to(compute_factory))),
+        )
+        .await;
+
+        // {"a":false, "b":false, "c": false, "d": 3.7 "e": 5, "f": 2}
+        let req = test::TestRequest::post()
+            .uri("/compute")
+            .set_json(&Params {
+                a: Some(false),
+                b: Some(true),
+                c: Some(true),
+                d: Some(3.7),
+                e: Some(5),
+                f: Some(2),
+                case: Some(Case::C1),
+            })
+            .to_request();
+        let resp = app.call(req).await.unwrap();
+
+        assert_eq!(resp.status(), http::StatusCode::OK);
+
+        let response_body = match resp.response().body().as_ref() {
+            Some(actix_web::body::Body::Bytes(bytes)) => bytes,
+            _ => panic!("Response error"),
+        };
+
+        assert_eq!(response_body, r#"{"h":"M","k":3.4533333333333336}"#);
+
+        Ok(())
+    }
+    #[actix_rt::test]
+    async fn incorrect_c1_input() -> Result<(), Error> {
+        let mut app = test::init_service(
+            App::new().service(web::resource("/compute").route(web::post().to(compute_factory))),
+        )
+        .await;
+
+        // {"a":false, "b":false, "c": false, "d": 3.7 "e": 5, "f": 2}
+        let req = test::TestRequest::post()
+            .uri("/compute")
+            .set_json(&Params {
+                a: Some(true),
+                b: Some(false),
+                c: Some(true),
+                d: Some(3.7),
+                e: Some(5),
+                f: Some(2),
+                case: Some(Case::C1),
+            })
+            .to_request();
+        let resp = app.call(req).await.unwrap();
+
+        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
+
+        let response_body = match resp.response().body().as_ref() {
+            Some(actix_web::body::Body::Bytes(bytes)) => bytes,
+            _ => panic!("Response error"),
+        };
+        let body = std::str::from_utf8(&response_body[0..12]).unwrap();
+
+        assert_eq!(body, r#"Wrong params"#);
+
+        Ok(())
+    }
+    #[actix_rt::test]
+    async fn correct_c2_input() -> Result<(), Error> {
+        let mut app = test::init_service(
+            App::new().service(web::resource("/compute").route(web::post().to(compute_factory))),
+        )
+        .await;
+
+        // {"a":false, "b":false, "c": false, "d": 3.7 "e": 5, "f": 2}
+        let req = test::TestRequest::post()
+            .uri("/compute")
+            .set_json(&Params {
+                a: Some(true),
+                b: Some(false),
+                c: Some(true),
+                d: Some(3.7),
+                e: Some(5),
+                f: Some(2),
+                case: Some(Case::C2),
+            })
+            .to_request();
+        let resp = app.call(req).await.unwrap();
+
+        assert_eq!(resp.status(), http::StatusCode::OK);
+
+        let response_body = match resp.response().body().as_ref() {
+            Some(actix_web::body::Body::Bytes(bytes)) => bytes,
+            _ => panic!("Response error"),
+        };
+
+        assert_eq!(response_body, r#"{"h":"M","k":5.885}"#);
+
+        Ok(())
+    }
 }
