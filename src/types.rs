@@ -19,6 +19,8 @@ pub struct Params {
     pub e: Option<i32>,
     #[serde(default)]
     pub f: Option<i32>,
+    #[serde(default)]
+    pub case: Option<Case>,
 }
 #[derive(Debug, Serialize)]
 pub struct Output {
@@ -32,6 +34,13 @@ pub enum H {
     P,
     T,
     E,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Case {
+    B,
+    C1,
+    C2
 }
 
 impl Default for H {

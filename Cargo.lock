@@ -1055,21 +1055,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "futures",
- "log 0.4.8",
- "pretty_env_logger",
- "serde",
- "serde_derive",
- "tokio",
- "warp",
-]
-
-[[package]]
 name = "sha-1"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1377,6 +1362,21 @@ dependencies = [
  "tokio-tungstenite",
  "tower-service",
  "urlencoding",
+]
+
+[[package]]
+name = "warp-template"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "futures",
+ "log 0.4.8",
+ "pretty_env_logger",
+ "serde",
+ "serde_derive",
+ "tokio",
+ "warp",
 ]
 
 [[package]]

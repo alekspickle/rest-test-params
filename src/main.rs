@@ -1,8 +1,16 @@
+//! Simple REST to process different params
+//!
+//! Expected input example {"a":true,"b":true, "c": true, "d": 3.7 "e": 5, "f": 2, "case": "C1"}
+//!
+//! # Run:
+//!
+//! ``` RUST_LOG=info cargo run```
+
+use anyhow::{anyhow, Result};
+use log::{info, warn};
 use std::convert::Infallible;
 use warp::{get, http::StatusCode, path, post, Filter, Rejection, Reply};
-use anyhow::{anyhow, Result};
-use log::info;
-
+// use serde::err
 #[cfg(test)]
 mod tests;
 
@@ -13,7 +21,7 @@ use types::*;
 async fn main() {
     pretty_env_logger::init();
 
-    // POST /compute  {"a": "true", "b": "false"}
+    // POST /compute  {"a":true,"b":true, "c": true, "d": 3.7 "e": 5, "f": 2, "case": "C1"}
     let compute = post()
         .and(path("compute"))
         .and(warp::body::content_length_limit(1024 * 16))
@@ -43,39 +51,56 @@ async fn main() {
 
 fn compute(p: &Params) -> Result<Output> {
     let Params { a, b, c, .. } = p;
+    let case = p.case.clone().map_or(Case::B, |v| v);
 
-    match (a, b, c) {
-        (Some(true), Some(true), Some(false)) => output(H::M, &p),
-        (Some(true), Some(true), Some(true)) => output(H::P, &p),
-        (Some(false), Some(true), Some(true)) => output(H::T, &p),
-        (_, _, _) => output(H::E, &p),
+    match case {
+        Case::B | Case::C1 => match (a, b, c) {
+            (Some(true), Some(true), Some(false)) => output(H::M, &p, case),
+            (Some(true), Some(true), Some(true)) => output(H::P, &p, case),
+            (Some(false), Some(true), Some(true)) => output(H::T, &p, case),
+            (_, _, _) => output(H::E, &p, case),
+        },
+        Case::C2 => match (a, b, c) {
+            (Some(true), Some(true), Some(false)) => output(H::M, &p, case),
+            (Some(true), Some(false), Some(true)) => output(H::M, &p, case),
+            (Some(true), Some(true), Some(true)) => output(H::P, &p, case),
+            (Some(false), Some(true), Some(true)) => output(H::T, &p, case),
+            (_, _, _) => output(H::E, &p, case),
+        },
     }
 }
 
-fn output(h: H, p: &Params) -> Result<Output> {
-    if p.d.is_none() {
-        return Err(anyhow!("no D param"))
-    }
-    
+fn output(h: H, p: &Params, case: Case) -> Result<Output> {
+    // if p.d.is_none() {
+    //     return Err(anyhow!("no D param"))
+    // }
+
     let d = p.d.expect("no D param");
 
     match h {
         H::M => {
             let e: f64 = p.e.expect("no E param").into();
 
-            Ok(Output {
-                h: H::M,
-                k: d + (d * e / 10.0),
-            })
+            let k = match case {
+                Case::C2 => {
+                    let f: f64 = p.f.expect("no F param").into();
+                    f + d + ((d * e) / 100.0)
+                }
+                _ => d + (d * e / 10.0),
+            };
+
+            Ok(Output { h: H::M, k })
         }
         H::P => {
             let e: f64 = p.e.expect("no E param").into();
             let f: f64 = p.f.expect("no F param").into();
 
-            Ok(Output {
-                h: H::M,
-                k: d + (d * (e - f) / 25.5),
-            })
+            let k = match case {
+                Case::C1 => 2.0 * d + ((d * e) / 100.0),
+                _ => d + (d * (e - f) / 25.5),
+            };
+
+            Ok(Output { h: H::M, k })
         }
         H::T => {
             let f: f64 = p.f.expect("no F param").into();
@@ -102,6 +127,7 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     } else if let Some(_) = err.find::<warp::reject::MethodNotAllowed>() {
         // We can handle a specific error, here METHOD_NOT_ALLOWED,
         // and render it however we want
+        warn!("{:?}", err);
         code = StatusCode::METHOD_NOT_ALLOWED;
         message = "METHOD_NOT_ALLOWED";
     } else {
